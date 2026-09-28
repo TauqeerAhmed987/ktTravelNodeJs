@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model amenities {
+  amenities_id         Int      @id @default(autoincrement())
+  amenities_created_by String?  @db.VarChar(30)
+  amenities_name       String?  @db.VarChar(255)
+  amenities_image      String?  @db.VarChar(255)
+  created_at           DateTime @default(now()) @db.Timestamp(0)
+  updated_at           DateTime @default(now()) @db.Timestamp(0)
+}
+
+model bookingrooms {
+  bookingroom_id    Int      @id @default(autoincrement())
+  user_id           String?  @db.VarChar(50)
+  booking_id        String?  @db.VarChar(50)
+  hotel_name        String?  @db.LongText
+  hotel_location    String?  @db.LongText
+  event_id          String?  @db.VarChar(50)
+  room_id           String?  @db.VarChar(50)
+  quantity          String?  @db.VarChar(50)
+  room_cap          String?  @db.LongText
+  room_price        String?  @db.VarChar(50)
+  room_actual_price Decimal  @default(0.00) @db.Decimal(10, 2)
+  checkin           String?  @db.VarChar(50)
+  checkout          String?  @db.VarChar(50)
+  adults            String?  @db.VarChar(255)
+  children          String?  @db.VarChar(255)
+  child_age         String?  @db.VarChar(255)
+  rooms             String?  @db.VarChar(255)
+  created_at        DateTime @default(now()) @db.Timestamp(0)
+  updated_at        DateTime @default(now()) @db.Timestamp(0)
+}
+
+model bookings {
+  booking_id                 Int      @id @default(autoincrement())
+  user_id                    String?  @db.VarChar(255)
+  total_card_amount          String?  @db.VarChar(50)
+  total_amount_after_percent String?  @db.VarChar(50)
+  balance                    String?  @db.VarChar(255)
+  transport_total            Decimal  @default(0.00) @db.Decimal(10, 2)
+  nextpayment                String?  @db.VarChar(255)
+  nextmonthdate              String?  @db.VarChar(50)
+  Street_2                   String?  @db.LongText
+  billing_City               String?  @db.Text
+  billing_State              String?  @db.LongText
+  billing_Postcode           String?  @db.VarChar(50)
+  billing_country            String?  @db.VarChar(100)
+  created_at                 DateTime @default(now()) @db.Timestamp(0)
+  updated_at                 DateTime @default(now()) @db.Timestamp(0)
+  access_code                String?  @unique(map: "bookings_access_code_unique") @db.VarChar(255)
+  payment_paused             Int      @default(0) @db.TinyInt
+  pause_reason               String?  @db.Text
+  source                     String   @default("admin") @db.VarChar(20)
+}
+
+model capacities {
+  capacity_id Int      @id @default(autoincrement())
+  adult_child String?  @db.VarChar(255)
+  user_id     String?  @db.VarChar(255)
+  created_at  DateTime @default(now()) @db.Timestamp(0)
+  updated_at  DateTime @default(now()) @db.Timestamp(0)
+}
+
+model event_payment_schedules {
+  id                 BigInt                              @id @default(autoincrement()) @db.UnsignedBigInt
+  event_id           Int                                 @db.UnsignedInt
+  installment_number Int                                 @db.TinyInt
+  amount_type        event_payment_schedules_amount_type
+  amount             Decimal                             @db.Decimal(10, 2)
+  due_date           DateTime                            @db.Date
+  created_at         DateTime?                           @db.Timestamp(0)
+  updated_at         DateTime?                           @db.Timestamp(0)
+}
+
+model eventrooms {
+  eventroom_id  Int      @id @default(autoincrement())
+  event_id      String?  @db.VarChar(255)
+  room_name     String?  @db.VarChar(255)
+  capacity_name String?  @db.VarChar(255)
+  room_cap      String?  @db.VarChar(255)
+  room_price    String?  @db.VarChar(255)
+  no_of_rooms   String?  @db.VarChar(255)
+  sum_of_rooms  String?  @db.VarChar(255)
+  created_at    DateTime @default(now()) @db.Timestamp(0)
+  updated_at    DateTime @default(now()) @db.Timestamp(0)
+}
+
+model events {
+  event_id            Int       @id @default(autoincrement())
+  client_created_by   String?   @db.VarChar(30)
+  random              String?   @db.VarChar(255)
+  client_name         String?   @db.VarChar(255)
+  client_email        String?   @db.VarChar(255)
+  client_phone        String?   @db.VarChar(255)
+  event_name          String?   @db.VarChar(255)
+  event_color_code    String?   @db.VarChar(255)
+  check_in            String?   @db.VarChar(255)
+  check_out           String?   @db.VarChar(255)
+  hotel_name          String?   @db.VarChar(255)
+  event_description   String?   @db.LongText
+  event_terms         String?   @db.LongText
+  transport_enabled   Boolean   @default(false)
+  transport_price     Decimal?  @db.Decimal(10, 2)
+  event_profile       String?   @db.Text
+  event_cover         String?   @db.Text
+  deposit_amount      Decimal   @default(0.00) @db.Decimal(10, 2)
+  deposit_type        String    @default("fixed") @db.VarChar(10)
+  final_payment_date  DateTime? @db.Date
+  monthly_payment_day Int       @default(1) @db.TinyInt
+  created_at          DateTime  @default(now()) @db.Timestamp(0)
+  updated_at          DateTime  @default(now()) @db.Timestamp(0)
+}
+
+model failed_jobs {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  uuid       String   @unique(map: "failed_jobs_uuid_unique") @db.VarChar(255)
+  connection String   @db.Text
+  queue      String   @db.Text
+  payload    String   @db.LongText
+  exception  String   @db.LongText
+  failed_at  DateTime @default(now()) @db.Timestamp(0)
+}
+
+model hotels {
+  hotel_id         Int      @id @default(autoincrement())
+  hotel_created_by String?  @db.VarChar(30)
+  hotel_name       String?  @db.VarChar(255)
+  hotel_location   String?  @db.Text
+  hotel_rating     String?  @db.VarChar(255)
+  hotel_amenities  String?  @db.Text
+  description      String?  @db.LongText
+  hotelimages      String?  @db.Text
+  hotel_status     String   @default("active") @db.VarChar(255)
+  created_at       DateTime @default(now()) @db.Timestamp(0)
+  updated_at       DateTime @default(now()) @db.Timestamp(0)
+}
+
+model migrations {
+  id        Int    @id @default(autoincrement()) @db.UnsignedInt
+  migration String @db.VarChar(255)
+  batch     Int
+}
+
+model password_resets {
+  password_resets_id Int       @id @default(autoincrement())
+  email              String    @db.VarChar(255)
+  token              String    @db.VarChar(255)
+  created_at         DateTime? @db.Timestamp(0)
+  updated_at         DateTime  @default(now()) @db.Timestamp(0)
+
+  @@index([email], map: "password_resets_email_index")
+}
+
+model payment_schedules {
+  id                 BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  booking_id         BigInt    @db.UnsignedBigInt
+  user_id            BigInt    @db.UnsignedBigInt
+  installment_number Int
+  amount             Decimal   @db.Decimal(10, 2)
+  due_date           DateTime  @db.Date
+  status             String    @default("pending") @db.VarChar(20)
+  stripe_charge_id   String?   @db.VarChar(255)
+  paid_at            DateTime? @db.Timestamp(0)
+  pause_reason       String?   @db.Text
+  created_at         DateTime? @db.Timestamp(0)
+  updated_at         DateTime? @db.Timestamp(0)
+}
+
+model personal_access_tokens {
+  id             BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  tokenable_type String    @db.VarChar(255)
+  tokenable_id   BigInt    @db.UnsignedBigInt
+  name           String    @db.VarChar(255)
+  token          String    @unique(map: "personal_access_tokens_token_unique") @db.VarChar(64)
+  abilities      String?   @db.Text
+  last_used_at   DateTime? @db.Timestamp(0)
+  created_at     DateTime? @db.Timestamp(0)
+  updated_at     DateTime? @db.Timestamp(0)
+
+  @@index([tokenable_type, tokenable_id], map: "personal_access_tokens_tokenable_type_tokenable_id_index")
+}
+
+model resetpassword {
+  resetpassword_id Int      @id @default(autoincrement())
+  email            String?  @db.VarChar(255)
+  token            String?  @db.VarChar(255)
+  created_at       DateTime @default(now()) @db.Timestamp(0)
+  updated_at       DateTime @default(now()) @db.Timestamp(0)
+}
+
+model rooms {
+  rooms_id         Int      @id @default(autoincrement())
+  hotel_id         String?  @db.VarChar(255)
+  room_name        String?  @db.VarChar(255)
+  room_type        String?  @db.VarChar(255)
+  no_of_rooms      String?  @db.VarChar(255)
+  room_amenities   String?  @db.Text
+  room_capacity    String?  @db.Text
+  room_description String?  @db.LongText
+  room_image       String?  @db.LongText
+  created_at       DateTime @default(now()) @db.Timestamp(0)
+  updated_at       DateTime @default(now()) @db.Timestamp(0)
+}
+
+model users {
+  id                 BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  role               Int?      @default(3)
+  user_created_by    String?   @db.VarChar(30)
+  name               String    @db.VarChar(255)
+  email              String    @unique(map: "users_email_unique") @db.VarChar(255)
+  email_verified_at  DateTime? @db.Timestamp(0)
+  password           String    @db.VarChar(255)
+  client_phone       String?   @db.VarChar(255)
+  client_adsress     String?   @db.VarChar(255)
+  client_profile     String?   @db.Text
+  legal_entity_name  String?   @db.VarChar(255)
+  organization_type  String?   @db.VarChar(255)
+  industry_type      String?   @db.VarChar(255)
+  mailing_address    String?   @db.Text
+  remember_token     String?   @db.VarChar(100)
+  google2fa_secret   String?   @db.VarChar(255)
+  customer_id        String?   @db.LongText
+  card_number        String?   @db.VarChar(255)
+  exp_month          String?   @db.VarChar(255)
+  exp_year           String?   @db.VarChar(255)
+  card_holder_name   String?   @db.VarChar(255)
+  cvv                String?   @db.VarChar(255)
+  preferred_name     String?   @db.VarChar(255)
+  member_designation String?   @db.VarChar(255)
+  created_at         DateTime? @db.Timestamp(0)
+  updated_at         DateTime? @db.Timestamp(0)
+  status             String    @default("active") @db.VarChar(255)
+}
+
+enum event_payment_schedules_amount_type {
+  fixed
+  percent
+}
