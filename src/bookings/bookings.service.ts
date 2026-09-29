@@ -46,10 +46,43 @@ export class BookingsService {
       orderBy: { created_at: 'desc' },
     });
 
-    return bookings.map((booking) => ({
-      ...booking,
-      rooms: rooms.filter((r) => Number(r.booking_id) === booking.booking_id),
-    }));
+    // Guest contact + room names, resolved here so the reservation table can
+    // render one row per booked room without extra round-trips.
+    const userIds = [
+      ...new Set(bookings.map((b) => Number(b.user_id)).filter((n) => Number.isFinite(n) && n > 0)),
+    ];
+    const roomIds = [
+      ...new Set(rooms.map((r) => Number(r.room_id)).filter((n) => Number.isFinite(n) && n > 0)),
+    ];
+    const [users, roomRows] = await Promise.all([
+      userIds.length
+        ? this.prisma.users.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, name: true, email: true, client_phone: true },
+          })
+        : [],
+      roomIds.length
+        ? this.prisma.rooms.findMany({
+            where: { rooms_id: { in: roomIds } },
+            select: { rooms_id: true, room_name: true },
+          })
+        : [],
+    ]);
+    const userById = new Map(users.map((u) => [Number(u.id), u]));
+    const roomNameById = new Map(roomRows.map((r) => [r.rooms_id, r.room_name]));
+
+    return bookings.map((booking) => {
+      const guest = userById.get(Number(booking.user_id));
+      return {
+        ...booking,
+        guest_name: guest?.name ?? null,
+        guest_email: guest?.email ?? null,
+        guest_phone: guest?.client_phone ?? null,
+        rooms: rooms
+          .filter((r) => Number(r.booking_id) === booking.booking_id)
+          .map((r) => ({ ...r, room_display_name: roomNameById.get(Number(r.room_id)) ?? null })),
+      };
+    });
   }
 
   async findOne(bookingId: number) {
@@ -554,6 +587,8 @@ export class BookingsService {
               client_adsress: dto.billing.street_1,
               customer_id: charge.customer as string,
               status: 'active',
+              created_at: new Date(),
+              updated_at: new Date(),
             },
           });
         }

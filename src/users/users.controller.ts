@@ -11,11 +11,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { UsersService } from './users.service.js';
-import { CreateUserDto } from './dto/create-user.dto.js';
+import { CreateMemberDto, CreateUserDto } from './dto/create-user.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/guards/roles.guard.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
+import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Role } from '../auth/roles.enum.js';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -29,7 +30,19 @@ export class UsersController {
     return this.usersService.findAll(role ? Number(role) : undefined);
   }
 
-  // Must come before the ':id' route below, or Nest routes it there first.
+  // Members routes must come before ':id' below, or Nest routes them there first.
+  @Roles(Role.ADMIN)
+  @Get('members')
+  listMembers(@CurrentUser() user: { userId: number }) {
+    return this.usersService.listMembers(user.userId);
+  }
+
+  @Roles(Role.ADMIN)
+  @Post('members')
+  createMember(@Body() dto: CreateMemberDto, @CurrentUser() user: { userId: number }) {
+    return this.usersService.createMember(dto, user.userId);
+  }
+
   @Get('clients-overview')
   getClientsOverview() {
     return this.usersService.getClientsOverview();

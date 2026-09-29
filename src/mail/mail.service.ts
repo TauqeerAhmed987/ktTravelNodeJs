@@ -62,6 +62,20 @@ export class MailService {
     });
   }
 
+  async sendMemberCredentials(params: { name: string; email: string; password: string }) {
+    await this.safeSend({
+      to: params.email,
+      subject: 'Your KT Travel dashboard login',
+      html: `
+        <p>Dear ${params.name},</p>
+        <p>Your KT Travel login access has been created by the admin.</p>
+        <p><strong>Email:</strong> ${params.email}<br/>
+           <strong>Password:</strong> ${params.password}</p>
+        <p><a href="${this.webAppUrl}/login">Log in to the dashboard</a></p>
+      `,
+    });
+  }
+
   async sendInstallmentReminder(params: {
     guestEmail: string;
     guestName: string;

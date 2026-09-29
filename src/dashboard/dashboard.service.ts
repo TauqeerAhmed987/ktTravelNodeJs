@@ -22,17 +22,17 @@ export class DashboardService {
     const [clientsPerMonth, hotelsPerMonth, eventsPerMonth] = await Promise.all([
       this.prisma.$queryRaw<MonthlyRow[]>`
         SELECT CONCAT(DATE_FORMAT(created_at, '%b'), '''', DATE_FORMAT(created_at, '%y')) as month, COUNT(*) as total
-        FROM users WHERE status = 'active' AND role = 3
+        FROM users WHERE status = 'active' AND role = 3 AND created_at IS NOT NULL
         GROUP BY month ORDER BY MIN(created_at)
       `,
       this.prisma.$queryRaw<MonthlyRow[]>`
         SELECT CONCAT(DATE_FORMAT(created_at, '%b'), '''', DATE_FORMAT(created_at, '%y')) as month, COUNT(*) as total
-        FROM hotels WHERE hotel_status = 'active'
+        FROM hotels WHERE hotel_status = 'active' AND created_at IS NOT NULL
         GROUP BY month ORDER BY MIN(created_at)
       `,
       this.prisma.$queryRaw<MonthlyRow[]>`
         SELECT CONCAT(DATE_FORMAT(created_at, '%b'), '''', DATE_FORMAT(created_at, '%y')) as month, COUNT(*) as total
-        FROM events
+        FROM events WHERE created_at IS NOT NULL
         GROUP BY month ORDER BY MIN(created_at)
       `,
     ]);

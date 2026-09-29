@@ -1,12 +1,11 @@
-import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service.js';
+import { Controller, Get, Redirect } from '@nestjs/common';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
-
+  // The API has no landing page — send browsers hitting the root to the web app.
   @Get()
-  getHello(): string {
-    return this.appService.getHello();
+  @Redirect()
+  redirectToWebApp() {
+    return { url: process.env.WEB_APP_URL ?? 'http://localhost:3001' };
   }
 }

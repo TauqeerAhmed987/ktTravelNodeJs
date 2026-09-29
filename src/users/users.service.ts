@@ -5,7 +5,9 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { CreateUserDto } from './dto/create-user.dto.js';
+import { randomBytes } from 'crypto';
+import { MailService } from '../mail/mail.service.js';
+import { CreateMemberDto, CreateUserDto } from './dto/create-user.dto.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
 
 function sanitize(user: any) {
@@ -15,7 +17,10 @@ function sanitize(user: any) {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mail: MailService,
+  ) {}
 
   async findAll(role?: number) {
     const users = await this.prisma.users.findMany({
@@ -23,6 +28,42 @@ export class UsersService {
       orderBy: { id: 'desc' },
     });
     return users.map(sanitize);
+  }
+
+  // Admin's own team members (role 4) — mirrors the old MembersController@members
+  async listMembers(adminId: number) {
+    const users = await this.prisma.users.findMany({
+      where: { role: 4, user_created_by: String(adminId) },
+      orderBy: { id: 'desc' },
+    });
+    return users.map(sanitize);
+  }
+
+  async createMember(dto: CreateMemberDto, adminId: number) {
+    const existing = await this.prisma.users.findUnique({ where: { email: dto.email } });
+    if (existing) throw new ConflictException('The email has already been taken.');
+
+    const plainPassword = randomBytes(8).toString('hex');
+    const user = await this.prisma.users.create({
+      data: {
+        role: 4,
+        user_created_by: String(adminId),
+        name: dto.name,
+        email: dto.email,
+        password: await bcrypt.hash(plainPassword, 10),
+        client_phone: dto.client_phone,
+        client_adsress: dto.client_adsress,
+        mailing_address: dto.mailing_address,
+        industry_type: dto.industry_type,
+        preferred_name: dto.preferred_name,
+        member_designation: dto.member_designation,
+        status: 'active',
+        created_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
+    await this.mail.sendMemberCredentials({ name: dto.name, email: dto.email, password: plainPassword });
+    return sanitize(user);
   }
 
   async findOne(id: number) {
@@ -49,7 +90,11 @@ export class UsersService {
         role: dto.role,
         client_phone: dto.client_phone,
         client_adsress: dto.client_adsress,
+        client_profile: dto.client_profile,
         status: 'active',
+        // users.created_at has no DB/Prisma default; the dashboard's monthly charts group by it
+        created_at: new Date(),
+        updated_at: new Date(),
       },
     });
     return sanitize(user);
@@ -67,7 +112,7 @@ export class UsersService {
     }
     const user = await this.prisma.users.update({
       where: { id: BigInt(id) },
-      data: dto,
+      data: { ...dto, updated_at: new Date() },
     });
     return sanitize(user);
   }
