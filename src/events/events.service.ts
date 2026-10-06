@@ -2,9 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateEventDto, EventRoomDto } from './dto/create-event.dto.js';
 import { UpdateEventDto } from './dto/update-event.dto.js';
+import { computeStock, stockKey } from '../bookings/booking-rules.util.js';
 
 const CODE_CHARS =
   '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+function eventRoomRowsForStock(rows: { room_name: string | null; room_cap: string | null; no_of_rooms: string | null }[]) {
+  return rows.map((r) => ({ room_name: r.room_name, room_cap: r.room_cap, no_of_rooms: r.no_of_rooms }));
+}
 
 function generateCode(length = 8): string {
   let out = '';
@@ -120,9 +125,15 @@ export class EventsService {
         .map((s) => amenityById.get(parseInt(s.trim(), 10)))
         .filter((a): a is (typeof amenityRows)[number] => Boolean(a));
 
+    // Rooms still free for every capacity option (null = no stock figure set, i.e. not limited).
+    // Aligned with the comma-separated room_cap list so the booking pages can index by position.
+    const stock = await computeStock(this.prisma, id, eventRoomRowsForStock(eventroomRows));
     const eventrooms = eventroomsRaw.map((er) => ({
       ...er,
       room: er.room ? { ...er.room, amenities: resolveAmenityList(er.room.room_amenities) } : null,
+      availability: (er.room_cap ?? '')
+        .split(',')
+        .map((cap) => stock.get(stockKey(er.room_name, cap.trim()))?.available ?? null),
     }));
 
     return {

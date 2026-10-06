@@ -7,6 +7,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -93,6 +94,12 @@ export class CreateBookingDto {
 
   @IsBoolean()
   terms_accepted: boolean;
+
+  // Free-text note the guest typed in the checkout "Comments" box
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  comments?: string;
 
   @IsString()
   stripe_token: string;

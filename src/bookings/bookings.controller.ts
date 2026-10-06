@@ -15,6 +15,7 @@ import { PausePaymentsDto } from './dto/pause-payments.dto.js';
 import { CreateBookingDto } from './dto/create-booking.dto.js';
 import { PayInstallmentDto } from './dto/pay-installment.dto.js';
 import { UpdateBookingDto } from './dto/update-booking.dto.js';
+import { CancelBookingDto } from './dto/cancel-booking.dto.js';
 import { RequestChangeDto } from './dto/request-change.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/guards/roles.guard.js';
@@ -100,6 +101,15 @@ export class BookingsController {
   @Patch(':id/update')
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateBookingDto) {
     return this.bookingsService.updateBooking(id, dto);
+  }
+
+  // Cancels the booking (its rooms go back into the event's inventory) and, if
+  // `refund` is true, refunds / records what the guest had paid.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.STAFF)
+  @Patch(':id/cancel')
+  cancel(@Param('id', ParseIntPipe) id: number, @Body() dto: CancelBookingDto) {
+    return this.bookingsService.cancelBooking(id, dto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

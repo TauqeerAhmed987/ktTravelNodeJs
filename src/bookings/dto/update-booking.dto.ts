@@ -20,11 +20,15 @@ export class UpdateBookingScheduleItemDto {
 }
 
 export class UpdateBookingDto {
+  // The stay dates are fixed by the event/booking and cannot be edited here.
+  // Still accepted (older clients send them) but ignored by updateBooking().
+  @IsOptional()
   @IsDateString()
-  checkin: string;
+  checkin?: string;
 
+  @IsOptional()
   @IsDateString()
-  checkout: string;
+  checkout?: string;
 
   @IsInt()
   @Min(0)
@@ -44,6 +48,13 @@ export class UpdateBookingDto {
   @IsInt()
   @Min(1)
   room_count: number;
+
+  // Per-person nightly rate typed in the admin form. When omitted the server uses the rate of
+  // the room's capacity option that matches the adults/children (or the rate already saved).
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  rate_per_person?: number;
 
   @IsBoolean()
   transport_enabled: boolean;

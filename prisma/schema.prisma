@@ -58,6 +58,29 @@ model bookings {
   payment_paused             Int      @default(0) @db.TinyInt
   pause_reason               String?  @db.Text
   source                     String   @default("admin") @db.VarChar(20)
+  guest_name                 String?  @db.VarChar(255)
+  guest_email                String?  @db.VarChar(255)
+  guest_phone                String?  @db.VarChar(50)
+  comments                   String?  @db.Text
+  status                     String   @default("active") @db.VarChar(20)
+  cancelled_at               DateTime? @db.Timestamp(0)
+  cancel_reason              String?  @db.Text
+}
+
+// Every payment taken, refund issued and overpayment on a booking (migrations-manual/2026-10-06_audit_fixes.sql)
+model booking_transactions {
+  id               BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  booking_id       Int
+  schedule_id      BigInt?  @db.UnsignedBigInt
+  type             String   @db.VarChar(20)
+  status           String   @default("succeeded") @db.VarChar(20)
+  amount           Decimal  @db.Decimal(10, 2)
+  stripe_charge_id String?  @db.VarChar(255)
+  stripe_refund_id String?  @db.VarChar(255)
+  note             String?  @db.Text
+  created_at       DateTime @default(now()) @db.Timestamp(0)
+
+  @@index([booking_id], map: "booking_transactions_booking_id_index")
 }
 
 model capacities {
