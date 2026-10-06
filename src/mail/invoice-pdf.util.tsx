@@ -46,9 +46,11 @@ const styles = StyleSheet.create({
 
   table: { marginBottom: 20 },
   tableHeaderRow: { flexDirection: 'row', backgroundColor: GREEN, paddingVertical: 6, paddingHorizontal: 8 },
-  tableHeaderCell: { flex: 1, fontSize: 9, fontWeight: 'bold', color: '#fff' },
+  // Every cell gets its own side padding so neighbouring columns never touch
+  // (long names such as "Junior Suite Ocean View" wrap inside their column instead of running into the next).
+  tableHeaderCell: { flex: 1, fontSize: 9, fontWeight: 'bold', color: '#fff', paddingHorizontal: 5 },
   tableRow: { flexDirection: 'row', borderBottom: '1pt solid #eee', paddingVertical: 6, paddingHorizontal: 8 },
-  tableCell: { flex: 1, fontSize: 10, color: '#444' },
+  tableCell: { flex: 1, fontSize: 10, color: '#444', paddingHorizontal: 5 },
   right: { textAlign: 'right' },
 
   totalsWrap: { flexDirection: 'row', marginBottom: 20 },
@@ -66,9 +68,9 @@ const styles = StyleSheet.create({
   scheduleBox: { backgroundColor: YELLOW_BG, border: `1pt solid ${YELLOW_BORDER}`, borderRadius: 4, padding: 12, marginBottom: 20 },
   scheduleTitle: { fontSize: 9, fontWeight: 'bold', color: ORANGE_DARK, textTransform: 'uppercase', marginBottom: 8 },
   scheduleHeaderRow: { flexDirection: 'row', backgroundColor: ORANGE, paddingVertical: 5, paddingHorizontal: 8 },
-  scheduleHeaderCell: { flex: 1, fontSize: 9, fontWeight: 'bold', color: '#fff' },
+  scheduleHeaderCell: { flex: 1, fontSize: 9, fontWeight: 'bold', color: '#fff', paddingHorizontal: 5 },
   scheduleRow: { flexDirection: 'row', borderBottom: `1pt solid ${YELLOW_BORDER}`, paddingVertical: 5, paddingHorizontal: 8 },
-  scheduleCell: { flex: 1, fontSize: 10, color: '#555' },
+  scheduleCell: { flex: 1, fontSize: 10, color: '#555', paddingHorizontal: 5 },
 
   codeBox: { alignItems: 'center', border: `2pt dashed ${GREEN}`, borderRadius: 4, padding: 14, marginBottom: 20 },
   codeLabel: { fontSize: 9, color: GREY_LIGHT, textTransform: 'uppercase', marginBottom: 6 },
@@ -82,6 +84,11 @@ const styles = StyleSheet.create({
   footer: { borderTop: '1pt solid #e0e0e0', paddingTop: 12, textAlign: 'center', fontSize: 9, color: '#aaa', lineHeight: 1.6 },
   footerStrong: { color: GREEN, fontWeight: 'bold' },
 });
+
+// Column widths (flex) — wide enough for the text each column holds
+const ROOM_COLS = { room: 2.4, capacity: 1.7, guests: 1.9, qty: 0.6, unit: 1.2, total: 1.3 };
+const ROOM_COLS_BEFORE_TOTALS = ROOM_COLS.room + ROOM_COLS.capacity + ROOM_COLS.guests + ROOM_COLS.qty + ROOM_COLS.unit;
+const SCHEDULE_COLS = { num: 0.6, due: 1.8, amount: 1.5, status: 1.4 };
 
 export interface InvoiceRoomLine {
   room_name: string;
@@ -183,27 +190,27 @@ function InvoiceDocument({ data }: { data: InvoiceData }) {
         <Text style={styles.sectionTitle}>Room Booking Details</Text>
         <View style={styles.table}>
           <View style={styles.tableHeaderRow}>
-            <Text style={styles.tableHeaderCell}>Room</Text>
-            <Text style={styles.tableHeaderCell}>Capacity</Text>
-            <Text style={styles.tableHeaderCell}>Guests</Text>
-            <Text style={[styles.tableHeaderCell, styles.right]}>Qty</Text>
-            <Text style={[styles.tableHeaderCell, styles.right]}>Unit Price</Text>
-            <Text style={[styles.tableHeaderCell, styles.right]}>Total</Text>
+            <Text style={[styles.tableHeaderCell, { flex: ROOM_COLS.room }]}>Room</Text>
+            <Text style={[styles.tableHeaderCell, { flex: ROOM_COLS.capacity }]}>Capacity</Text>
+            <Text style={[styles.tableHeaderCell, { flex: ROOM_COLS.guests }]}>Guests</Text>
+            <Text style={[styles.tableHeaderCell, styles.right, { flex: ROOM_COLS.qty }]}>Qty</Text>
+            <Text style={[styles.tableHeaderCell, styles.right, { flex: ROOM_COLS.unit }]}>Unit Price</Text>
+            <Text style={[styles.tableHeaderCell, styles.right, { flex: ROOM_COLS.total }]}>Total</Text>
           </View>
           {data.rooms.map((r, i) => (
             <View style={styles.tableRow} key={i}>
-              <Text style={styles.tableCell}>{r.room_name}</Text>
-              <Text style={styles.tableCell}>{r.room_cap.replace(/_/g, ' ')}</Text>
-              <Text style={styles.tableCell}>{guestLabel(r.adults, r.children)}</Text>
-              <Text style={[styles.tableCell, styles.right]}>{r.quantity}</Text>
-              <Text style={[styles.tableCell, styles.right]}>${r.unit_price.toFixed(2)}</Text>
-              <Text style={[styles.tableCell, styles.right]}>${r.total.toFixed(2)}</Text>
+              <Text style={[styles.tableCell, { flex: ROOM_COLS.room }]}>{r.room_name}</Text>
+              <Text style={[styles.tableCell, { flex: ROOM_COLS.capacity }]}>{r.room_cap.replace(/_/g, ' ')}</Text>
+              <Text style={[styles.tableCell, { flex: ROOM_COLS.guests }]}>{guestLabel(r.adults, r.children)}</Text>
+              <Text style={[styles.tableCell, styles.right, { flex: ROOM_COLS.qty }]}>{r.quantity}</Text>
+              <Text style={[styles.tableCell, styles.right, { flex: ROOM_COLS.unit }]}>${r.unit_price.toFixed(2)}</Text>
+              <Text style={[styles.tableCell, styles.right, { flex: ROOM_COLS.total }]}>${r.total.toFixed(2)}</Text>
             </View>
           ))}
           {data.transportTotal > 0 && (
             <View style={styles.tableRow}>
-              <Text style={{ flex: 5, fontSize: 10, fontStyle: 'italic', color: '#444' }}>Transportation Add-on</Text>
-              <Text style={[styles.tableCell, styles.right]}>${data.transportTotal.toFixed(2)}</Text>
+              <Text style={{ flex: ROOM_COLS_BEFORE_TOTALS, fontSize: 10, fontStyle: 'italic', color: '#444', paddingHorizontal: 5 }}>Transportation Add-on</Text>
+              <Text style={[styles.tableCell, styles.right, { flex: ROOM_COLS.total }]}>${data.transportTotal.toFixed(2)}</Text>
             </View>
           )}
         </View>
@@ -240,17 +247,17 @@ function InvoiceDocument({ data }: { data: InvoiceData }) {
           <View style={styles.scheduleBox}>
             <Text style={styles.scheduleTitle}>Payment Schedule</Text>
             <View style={styles.scheduleHeaderRow}>
-              <Text style={styles.scheduleHeaderCell}>#</Text>
-              <Text style={styles.scheduleHeaderCell}>Due Date</Text>
-              <Text style={[styles.scheduleHeaderCell, styles.right]}>Amount</Text>
-              <Text style={styles.scheduleHeaderCell}>Status</Text>
+              <Text style={[styles.scheduleHeaderCell, { flex: SCHEDULE_COLS.num }]}>#</Text>
+              <Text style={[styles.scheduleHeaderCell, { flex: SCHEDULE_COLS.due }]}>Due Date</Text>
+              <Text style={[styles.scheduleHeaderCell, styles.right, { flex: SCHEDULE_COLS.amount }]}>Amount</Text>
+              <Text style={[styles.scheduleHeaderCell, { flex: SCHEDULE_COLS.status, paddingLeft: 22 }]}>Status</Text>
             </View>
             {data.schedule.map((s, i) => (
               <View style={styles.scheduleRow} key={i}>
-                <Text style={styles.scheduleCell}>{s.installmentNumber}</Text>
-                <Text style={styles.scheduleCell}>{s.dueDate}</Text>
-                <Text style={[styles.scheduleCell, styles.right, { fontWeight: 'bold', color: TEXT }]}>${s.amount.toFixed(2)}</Text>
-                <Text style={styles.scheduleCell}>{s.status === 'paid' ? 'Paid' : 'Pending'}</Text>
+                <Text style={[styles.scheduleCell, { flex: SCHEDULE_COLS.num }]}>{s.installmentNumber}</Text>
+                <Text style={[styles.scheduleCell, { flex: SCHEDULE_COLS.due }]}>{s.dueDate}</Text>
+                <Text style={[styles.scheduleCell, styles.right, { flex: SCHEDULE_COLS.amount, fontWeight: 'bold', color: TEXT }]}>${s.amount.toFixed(2)}</Text>
+                <Text style={[styles.scheduleCell, { flex: SCHEDULE_COLS.status, paddingLeft: 22 }]}>{s.status === 'paid' ? 'Paid' : 'Pending'}</Text>
               </View>
             ))}
           </View>

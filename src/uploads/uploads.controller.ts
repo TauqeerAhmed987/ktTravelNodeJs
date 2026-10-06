@@ -9,6 +9,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
+import { mkdirSync } from 'fs';
+import { getUploadsDir } from './uploads.config.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/guards/roles.guard.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
@@ -22,7 +24,11 @@ export class UploadsController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: './uploads',
+        destination: (_req, _file, cb) => {
+          const dir = getUploadsDir();
+          mkdirSync(dir, { recursive: true });
+          cb(null, dir);
+        },
         filename: (_req, file, cb) => {
           const unique = `${Date.now()}_${Math.round(Math.random() * 1e9)}`;
           cb(null, `${unique}${extname(file.originalname)}`);
