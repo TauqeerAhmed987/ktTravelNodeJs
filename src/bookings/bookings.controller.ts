@@ -6,6 +6,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { PayInstallmentDto } from './dto/pay-installment.dto.js';
 import { UpdateBookingDto } from './dto/update-booking.dto.js';
 import { CancelBookingDto } from './dto/cancel-booking.dto.js';
 import { RequestChangeDto } from './dto/request-change.dto.js';
+import { UpdateChangeRequestDto } from './dto/update-change-request.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/guards/roles.guard.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
@@ -59,6 +61,29 @@ export class BookingsController {
   @Post('request-change')
   requestChange(@Body() dto: RequestChangeDto) {
     return this.bookingsService.requestChange(dto.access_code, dto.message);
+  }
+
+  // Admin — guests' change requests (stored, so nothing is lost if the e-mail does not arrive).
+  // Declared before the ':id' routes so "change-requests" is not read as a booking id.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.STAFF, Role.MEMBER)
+  @Get('change-requests')
+  listChangeRequests(@Query('status') status?: string) {
+    return this.bookingsService.listChangeRequests(status || undefined);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.STAFF, Role.MEMBER)
+  @Get('change-requests/count')
+  countChangeRequests() {
+    return this.bookingsService.countOpenChangeRequests();
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.STAFF)
+  @Patch('change-requests/:id')
+  updateChangeRequest(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateChangeRequestDto) {
+    return this.bookingsService.updateChangeRequest(id, dto.status, dto.admin_note);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -8,6 +8,7 @@ export class MailService {
   private readonly logger = new Logger(MailService.name);
   private readonly transporter: nodemailer.Transporter;
   private readonly fromAddress: string;
+  private readonly replyTo: string | undefined;
   private readonly webAppUrl: string;
 
   constructor(private readonly config: ConfigService) {
@@ -20,7 +21,15 @@ export class MailService {
         pass: this.config.get<string>('MAIL_PASSWORD'),
       },
     });
-    this.fromAddress = `${this.config.get<string>('MAIL_FROM_NAME')} <${this.config.get<string>('MAIL_FROM_ADDRESS')}>`;
+    // Gmail (and most SMTP providers) only deliver reliably when "From" is the account that
+    // logs in; a different From address gets rewritten or lands in spam. So send from the
+    // login account and let replies go to MAIL_FROM_ADDRESS when that is a different address.
+    const username = this.config.get<string>('MAIL_USERNAME') ?? '';
+    const configuredFrom = this.config.get<string>('MAIL_FROM_ADDRESS') || username;
+    const name = this.config.get<string>('MAIL_FROM_NAME') || 'KT Travel & More';
+    const sendAs = username || configuredFrom;
+    this.fromAddress = `${name} <${sendAs}>`;
+    this.replyTo = configuredFrom && configuredFrom.toLowerCase() !== sendAs.toLowerCase() ? configuredFrom : undefined;
     this.webAppUrl = this.config.get<string>('WEB_APP_URL') ?? 'http://localhost:3001';
   }
 
@@ -28,7 +37,8 @@ export class MailService {
   // succeeded — email is a notification, not a transaction participant.
   private async safeSend(options: { to: string; subject: string; html: string; attachments?: any[] }) {
     try {
-      await this.transporter.sendMail({ from: this.fromAddress, ...options });
+      const info = await this.transporter.sendMail({ from: this.fromAddress, replyTo: this.replyTo, ...options });
+      this.logger.log(`Email "${options.subject}" sent to ${options.to} (${info.messageId ?? 'no id'})`);
     } catch (err) {
       this.logger.error(`Failed to send email to ${options.to}: ${(err as Error).message}`);
     }
@@ -43,22 +53,47 @@ export class MailService {
   }) {
     const pdf = await generateInvoicePdf(params.invoiceData);
     const myBookingUrl = `${this.webAppUrl}/my-booking?code=${params.accessCode}`;
+    const esc = (v: string) =>
+      v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+    // Same layout and wording as the old system's email.confirmedbooking template; styles are
+    // inline because several mail clients drop <style> blocks.
     await this.safeSend({
       to: params.guestEmail,
-      subject: `Booking Confirmed — ${params.invoiceData.eventName}`,
+      subject: 'Booking Confirmation & Invoice – KT Travel & More',
       html: `
-        <p>Hi ${params.guestName},</p>
-        <p>Your reservation for <strong>${params.invoiceData.eventName}</strong> at ${params.invoiceData.hotelName} is confirmed.</p>
-        <p><strong>Deposit paid:</strong> $${params.invoiceData.depositPaid.toFixed(2)}<br/>
-           <strong>Remaining balance:</strong> $${params.invoiceData.balance.toFixed(2)}</p>
-        <p>Your Booking Access Code: <strong>${params.accessCode}</strong></p>
-        <p><a href="${myBookingUrl}">View &amp; manage your booking</a></p>
-        <p>Your invoice is attached.</p>
+<div style="font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 1px 0;">
+  <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 8px; overflow: hidden;">
+    <div style="background: #325440; padding: 30px; text-align: center;">
+      <h2 style="color: #fff; margin: 0; font-size: 22px;">KT Travel &amp; More</h2>
+    </div>
+    <div style="padding: 30px; color: #333;">
+      <p style="font-size: 15px; line-height: 1.6;">${esc(params.guestName)},</p>
+      <p style="font-size: 15px; line-height: 1.6;">Your booking has been confirmed! Your invoice is attached to this email as a PDF. Use the code below to view your booking details at any time.</p>
+
+      <div style="background: #f0f6f2; border: 2px dashed #325440; border-radius: 8px; text-align: center; padding: 20px; margin: 24px 0;">
+        <p style="margin: 0 0 8px; font-size: 13px; color: #666;">Your Booking Access Code</p>
+        <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #325440;">${esc(params.accessCode)}</span>
+      </div>
+
+      <p style="text-align: center; font-size: 15px; line-height: 1.6;">
+        <a href="${myBookingUrl}" style="display: inline-block; background: #325440; color: #fff; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-size: 15px; font-weight: bold;">View My Booking</a>
+      </p>
+
+      <p style="font-size: 13px; color: #666; margin-top: 24px; line-height: 1.6;">
+        Or visit <strong>${this.webAppUrl}/my-booking</strong> and enter your code manually.
+      </p>
+
+      <p style="font-size: 15px; line-height: 1.6;">If you have any questions or need to make changes, please use the "Request Change" button on your booking page.</p>
+      <p style="font-size: 15px; line-height: 1.6;">Thank you for choosing KT Travel &amp; More!</p>
+    </div>
+    <div style="background: #f4f4f4; text-align: center; padding: 16px; font-size: 12px; color: #999;">
+      &copy; ${new Date().getFullYear()} KT Travel &amp; More. All rights reserved.
+    </div>
+  </div>
+</div>
       `,
-      attachments: [
-        { filename: `invoice-${params.invoiceData.invoiceNumber}.pdf`, content: pdf },
-      ],
+      attachments: [{ filename: 'invoice.pdf', content: pdf }],
     });
   }
 
@@ -208,7 +243,12 @@ export class MailService {
     accessCode: string;
     message: string;
   }) {
-    const adminAddress = this.config.get<string>('MAIL_FROM_ADDRESS') as string;
+    // ADMIN_NOTIFY_EMAIL when set; otherwise the account that actually sends the mail
+    // (MAIL_USERNAME) — MAIL_FROM_ADDRESS may be an alias nobody reads.
+    const adminAddress =
+      this.config.get<string>('ADMIN_NOTIFY_EMAIL') ||
+      this.config.get<string>('MAIL_USERNAME') ||
+      (this.config.get<string>('MAIL_FROM_ADDRESS') as string);
     await this.safeSend({
       to: adminAddress,
       subject: 'Booking Change Request – KT Travel',

@@ -134,7 +134,13 @@ export class UsersService {
         users.id, users.name, users.email, users.client_phone, users.client_profile, users.status,
         bookings.booking_id, bookings.total_card_amount, bookings.balance,
         bookings.total_amount_after_percent, bookings.nextpayment, bookings.nextmonthdate,
-        bookings.created_at AS booking_created_at
+        bookings.created_at AS booking_created_at,
+        -- total_amount_after_percent is the deposit only; add the installments paid since
+        CASE WHEN bookings.booking_id IS NULL THEN NULL ELSE
+          CAST(COALESCE(bookings.total_amount_after_percent, 0) AS DECIMAL(10,2)) +
+          COALESCE((SELECT SUM(ps.amount) FROM payment_schedules ps
+                    WHERE ps.booking_id = bookings.booking_id AND ps.status = 'paid'), 0)
+        END AS amount_paid
       FROM users
       LEFT JOIN bookings ON users.id = bookings.user_id
       WHERE users.role = 3
