@@ -261,6 +261,7 @@ export class BookingsService {
         bookingrooms.room_id, bookingrooms.room_cap,
         rooms.room_name,
         events.event_id AS event_pk, events.event_name, events.check_in, events.check_out,
+        events.transport_price AS event_transport_price,
         hotels.hotel_name, hotels.hotel_location
       FROM bookings
       LEFT JOIN bookingrooms ON bookingrooms.booking_id = bookings.booking_id
@@ -403,28 +404,31 @@ export class BookingsService {
     });
 
     // ---- dates -------------------------------------------------------------
+    // The admin may move the stay (e.g. a guest now arrives a day later) as long as it stays
+    // within the event's dates; nights, price, installments and the invoice follow.
     let nights = 1;
+    let newCheckin: string | null = null;
+    let newCheckout: string | null = null;
     if (bookingroom) {
-      const stayCheckin = toIsoDay(bookingroom.checkin);
-      const stayCheckout = toIsoDay(bookingroom.checkout);
-      if (!stayCheckin || !stayCheckout) {
-        throw new BadRequestException('The check-in / check-out dates saved on this booking are not valid dates.');
-      }
-      nights = nightsBetween(stayCheckin, stayCheckout);
-      if (nights < 1) {
+      const pick = (label: string, submitted: string | undefined, saved: unknown) => {
+        const day = submitted ? toIsoDay(submitted) : toIsoDay(saved as string | null);
+        if (!day) throw new BadRequestException(`${label} date is not a valid date.`);
+        return day;
+      };
+      newCheckin = pick('Check-in', dto.checkin, bookingroom.checkin);
+      newCheckout = pick('Check-out', dto.checkout, bookingroom.checkout);
+      if (newCheckout <= newCheckin) {
         throw new BadRequestException('Check-out must be after check-in.');
       }
-      for (const [label, submitted, saved] of [
-        ['Check-in', dto.checkin, stayCheckin],
-        ['Check-out', dto.checkout, stayCheckout],
-      ] as const) {
-        if (submitted === undefined || submitted === null || submitted === '') continue;
-        const day = toIsoDay(submitted);
-        if (!day) throw new BadRequestException(`${label} date is not a valid date.`);
-        if (day !== saved) {
-          throw new BadRequestException(`${label} date cannot be changed — the stay dates are fixed for this booking.`);
-        }
+      const event = bookingroom.event_id
+        ? await this.prisma.events.findUnique({ where: { event_id: Number(bookingroom.event_id) } })
+        : null;
+      const eventStart = toIsoDay(event?.check_in);
+      const eventEnd = toIsoDay(event?.check_out);
+      if (eventStart && eventEnd && (newCheckin < eventStart || newCheckout > eventEnd)) {
+        throw new BadRequestException(`The stay must be within the event's dates (${eventStart} - ${eventEnd}).`);
       }
+      nights = nightsBetween(newCheckin, newCheckout);
     }
 
     // ---- guests / room -----------------------------------------------------
@@ -446,14 +450,9 @@ export class BookingsService {
       : await this.prisma.rooms.findUnique({ where: { rooms_id: Number(dto.room_id) } });
     const roomLabel = roomRecord?.room_name ?? 'This room';
 
+    // The admin has full control here: no guest-count limits (those apply to guests booking
+    // through the event link). The rate still follows the room option the party matches.
     const eventCaps = splitCsv(eventroom?.room_cap);
-    const { maxAdults, maxPeople } = maxOccupancy([...eventCaps, ...splitCsv(roomRecord?.room_capacity)]);
-    if (maxAdults > 0 && adults > maxAdults) {
-      throw new BadRequestException(`${roomLabel} allows a maximum of ${maxAdults} adult${maxAdults === 1 ? '' : 's'}.`);
-    }
-    if (maxPeople > 0 && adults + children > maxPeople) {
-      throw new BadRequestException(`${roomLabel} allows a maximum of ${maxPeople} guests (adults and children together).`);
-    }
 
     // ---- rate (follows the occupancy) -----------------------------------------
     const ages = childAge.split(',').map((s) => s.trim()).filter(Boolean);
@@ -472,9 +471,14 @@ export class BookingsService {
         const o = parseCapacity(c);
         return !!o && o.adults === adults && o.children === children;
       });
+      // otherwise the smallest option the party fits (3 adults -> "4 Adults"), then the option
+      // already on the booking, then one with the same number of adults
+      const fitting = allowedCapacities(eventCaps, adults, children).filter((c) => fitsCapacity(c, adults, children));
+      const smallestFit = fitting.length ? eventCaps.indexOf(fitting[0]) : -1;
       const current = eventCaps.findIndex((c) => sameCapacity(c, bookingroom?.room_cap));
       const sameAdults = eventCaps.findIndex((c) => parseCapacity(c)?.adults === adults);
-      const idx = exact >= 0 ? exact : current >= 0 ? current : sameAdults >= 0 ? sameAdults : 0;
+      const idx =
+        exact >= 0 ? exact : smallestFit >= 0 ? smallestFit : current >= 0 ? current : sameAdults >= 0 ? sameAdults : 0;
       if (eventCaps[idx] !== undefined && rateAt(idx) > 0) {
         baseRate = rateAt(idx);
         roomCap = eventCaps[idx];
@@ -540,6 +544,7 @@ export class BookingsService {
           where: { booking_id: String(bookingId) },
           data: {
             room_id: dto.room_id,
+            ...(newCheckin && newCheckout ? { checkin: newCheckin, checkout: newCheckout } : {}),
             quantity: String(qty),
             room_price: String(newRoomPrice),
             room_actual_price: baseRate,
