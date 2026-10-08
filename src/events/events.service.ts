@@ -1,8 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateEventDto, EventRoomDto } from './dto/create-event.dto.js';
 import { UpdateEventDto } from './dto/update-event.dto.js';
-import { computeStock, stockKey } from '../bookings/booking-rules.util.js';
+import { computeStock, isEventClosed, stockKey, toIsoDay, todayIso } from '../bookings/booking-rules.util.js';
 
 const CODE_CHARS =
   '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -143,6 +143,9 @@ export class EventsService {
       paymentSchedules,
       hotel,
       hotelAmenities: resolveAmenityList(hotel?.hotel_amenities),
+      // Guest booking page: closed once the event is over; check-in can't be before today
+      booking_closed: isEventClosed(event.check_out),
+      today: todayIso(),
     };
   }
 
@@ -154,10 +157,49 @@ export class EventsService {
     return this.findOne(event.event_id);
   }
 
+  // Same rules the admin event form enforces, so a direct API call cannot save an event
+  // the booking flow would mishandle.
+  private validateEventRules(e: {
+    check_in?: string | null;
+    check_out?: string | null;
+    deposit_type?: string | null;
+    deposit_amount?: number | string | null;
+    installments?: { amount_type: string; amount: number | string }[];
+  }) {
+    const start = toIsoDay(e.check_in);
+    const end = toIsoDay(e.check_out);
+    if (!start || !end) throw new BadRequestException('The event start and end dates must be valid dates.');
+    if (end <= start) throw new BadRequestException('The event end date must be after the start date.');
+
+    if (e.installments) {
+      if (e.installments.length > 3) {
+        throw new BadRequestException('An event can have at most 3 installments.');
+      }
+      // Percent installments, like a percent deposit, are a share of the booking's total:
+      // deposit 30% + installments 50% + 20% = 100%
+      const percent = e.installments.filter((i) => i.amount_type === 'percent');
+      const depositPercent = e.deposit_type === 'percent' ? Number(e.deposit_amount) || 0 : 0;
+      const hasFixed = e.deposit_type !== 'percent' || e.installments.some((i) => i.amount_type === 'fixed');
+      const total =
+        Math.round((depositPercent + percent.reduce((sum, i) => sum + (Number(i.amount) || 0), 0)) * 100) / 100;
+      if (percent.length > 0 && !hasFixed && total !== 100) {
+        throw new BadRequestException(
+          `The deposit and installments must add up to 100% of the total (currently ${total}%).`,
+        );
+      }
+      if (percent.length > 0 && hasFixed && total >= 100) {
+        throw new BadRequestException(
+          `The deposit and percent installments already reach ${total}% of the total, leaving nothing for the fixed amounts. Keep them below 100%.`,
+        );
+      }
+    }
+  }
+
   async create(dto: CreateEventDto) {
     if (dto.rooms.length === 0) {
       throw new NotFoundException('Please select at least one room.');
     }
+    this.validateEventRules(dto);
 
     const createdEventId = await this.prisma.$transaction(async (tx) => {
       const event = await tx.events.create({
@@ -209,7 +251,14 @@ export class EventsService {
   }
 
   async update(id: number, dto: UpdateEventDto) {
-    await this.findOne(id);
+    const current = await this.findOne(id);
+    this.validateEventRules({
+      check_in: dto.check_in ?? current.check_in,
+      check_out: dto.check_out ?? current.check_out,
+      deposit_type: dto.deposit_type ?? current.deposit_type,
+      deposit_amount: dto.deposit_amount ?? Number(current.deposit_amount),
+      installments: dto.installments,
+    });
 
     await this.prisma.$transaction(async (tx) => {
       const { rooms, installments, ...eventFields } = dto;

@@ -67,6 +67,23 @@ model bookings {
   cancel_reason              String?  @db.Text
 }
 
+// Guest "request a change" messages from My Booking (migrations-manual/2026-10-08_change_requests.sql)
+model booking_change_requests {
+  id          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  booking_id  Int
+  access_code String?   @db.VarChar(255)
+  guest_name  String?   @db.VarChar(255)
+  guest_email String?   @db.VarChar(255)
+  message     String    @db.Text
+  status      String    @default("open") @db.VarChar(20)
+  admin_note  String?   @db.Text
+  created_at  DateTime  @default(now()) @db.Timestamp(0)
+  resolved_at DateTime? @db.Timestamp(0)
+
+  @@index([booking_id], map: "booking_change_requests_booking_id_index")
+  @@index([status], map: "booking_change_requests_status_index")
+}
+
 // Every payment taken, refund issued and overpayment on a booking (migrations-manual/2026-10-06_audit_fixes.sql)
 model booking_transactions {
   id               BigInt   @id @default(autoincrement()) @db.UnsignedBigInt

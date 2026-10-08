@@ -20,8 +20,7 @@ export class UpdateBookingScheduleItemDto {
 }
 
 export class UpdateBookingDto {
-  // The stay dates are fixed by the event/booking and cannot be edited here.
-  // Still accepted (older clients send them) but ignored by updateBooking().
+  // New stay dates (must stay within the event's dates). Omitted = keep the saved dates.
   @IsOptional()
   @IsDateString()
   checkin?: string;

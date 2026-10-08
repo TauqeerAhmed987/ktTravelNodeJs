@@ -13,8 +13,12 @@ import { PayInstallmentDto } from './dto/pay-installment.dto.js';
 import { UpdateBookingDto } from './dto/update-booking.dto.js';
 import { CancelBookingDto } from './dto/cancel-booking.dto.js';
 import {
+  allowedCapacities,
   buildInstallmentAmounts,
+  capacityLabel,
   computeStock,
+  fitsCapacity,
+  isEventClosed,
   maxOccupancy,
   nightsBetween,
   parseCapacity,
@@ -22,6 +26,7 @@ import {
   splitCsv,
   stockKey,
   toIsoDay,
+  todayIso,
 } from './booking-rules.util.js';
 import {
   calculateDeposit,
@@ -131,7 +136,9 @@ export class BookingsService {
       where: { access_code: accessCode },
     });
     if (!booking) throw new NotFoundException('Invalid booking access code.');
-    return this.getReservationDetail(booking.booking_id);
+    const detail = await this.getReservationDetail(booking.booking_id);
+    // the admin's note on a change request is internal
+    return { ...detail, changeRequests: detail.changeRequests.map(({ admin_note, ...r }) => r) };
   }
 
   async getInvoicePdfByAccessCode(accessCode: string) {
@@ -142,9 +149,9 @@ export class BookingsService {
     return this.getInvoicePdf(booking.booking_id);
   }
 
-  // Emails the admin team a guest's free-text change request — mirrors
-  // ClientController::requestChange() exactly (no DB write, just a
-  // notification email to the business inbox).
+  // A guest's free-text change request from My Booking. Stored so the admin sees it in
+  // the dashboard even if the notification e-mail never arrives; the e-mail is sent in
+  // the background so the guest is not kept waiting on the mail server.
   async requestChange(accessCode: string, message: string) {
     const booking = await this.prisma.bookings.findUnique({
       where: { access_code: accessCode },
@@ -154,15 +161,50 @@ export class BookingsService {
     const guest = booking.user_id
       ? await this.prisma.users.findUnique({ where: { id: BigInt(booking.user_id) } })
       : null;
+    const guestName = booking.guest_name ?? guest?.name ?? 'Guest';
+    const guestEmail = booking.guest_email ?? guest?.email ?? null;
 
-    await this.mail.sendChangeRequest({
-      guestName: booking.guest_name ?? guest?.name ?? 'Guest',
-      guestEmail: booking.guest_email ?? guest?.email ?? 'N/A',
-      accessCode,
-      message,
+    await this.prisma.booking_change_requests.create({
+      data: {
+        booking_id: booking.booking_id,
+        access_code: booking.access_code,
+        guest_name: guestName,
+        guest_email: guestEmail,
+        message: message.trim(),
+      },
     });
 
+    void this.mail
+      .sendChangeRequest({ guestName, guestEmail: guestEmail ?? 'N/A', accessCode, message })
+      .catch(() => undefined);
+
     return { sent: true };
+  }
+
+  async listChangeRequests(status?: string) {
+    const rows = await this.prisma.booking_change_requests.findMany({
+      where: status ? { status } : undefined,
+      orderBy: [{ status: 'asc' }, { created_at: 'desc' }],
+    });
+    return rows.map((r) => ({ ...r, id: Number(r.id) }));
+  }
+
+  async countOpenChangeRequests() {
+    return { open: await this.prisma.booking_change_requests.count({ where: { status: 'open' } }) };
+  }
+
+  async updateChangeRequest(id: number, status: 'open' | 'resolved', adminNote?: string) {
+    const existing = await this.prisma.booking_change_requests.findUnique({ where: { id: BigInt(id) } });
+    if (!existing) throw new NotFoundException('Change request not found.');
+    const row = await this.prisma.booking_change_requests.update({
+      where: { id: BigInt(id) },
+      data: {
+        status,
+        admin_note: adminNote !== undefined ? adminNote.trim() || null : undefined,
+        resolved_at: status === 'resolved' ? new Date() : null,
+      },
+    });
+    return { ...row, id: Number(row.id) };
   }
 
   async pausePayments(bookingId: number, reason?: string) {
@@ -219,6 +261,7 @@ export class BookingsService {
         bookingrooms.room_id, bookingrooms.room_cap,
         rooms.room_name,
         events.event_id AS event_pk, events.event_name, events.check_in, events.check_out,
+        events.transport_price AS event_transport_price,
         hotels.hotel_name, hotels.hotel_location
       FROM bookings
       LEFT JOIN bookingrooms ON bookingrooms.booking_id = bookings.booking_id
@@ -236,6 +279,14 @@ export class BookingsService {
       where: { booking_id: bookingId },
       orderBy: { installment_number: 'asc' },
     });
+
+    // total_amount_after_percent is the DEPOSIT (both this system and the old Laravel app
+    // only lower `balance` when an installment is paid), so the total paid so far is the
+    // deposit plus every paid installment.
+    booking.amount_paid = round2(
+      Number(booking.total_amount_after_percent ?? 0) +
+        paymentSchedule.filter((s) => s.status === 'paid').reduce((sum, s) => sum + Number(s.amount), 0),
+    );
 
     let rooms: { rooms_id: number; room_name: string | null }[] = [];
     // Rate of every capacity option + the guest limits of every room type of this event:
@@ -291,7 +342,14 @@ export class BookingsService {
       Math.max(0, transactions.filter((t) => t.type === 'refund_due').reduce((sum, t) => sum + t.amount, 0)),
     );
 
-    return { booking, paymentSchedule, rooms, rates, occupancy, transactions, refundDue };
+    const changeRequests = (
+      await this.prisma.booking_change_requests.findMany({
+        where: { booking_id: bookingId },
+        orderBy: { created_at: 'desc' },
+      })
+    ).map((r) => ({ ...r, id: Number(r.id) }));
+
+    return { booking, paymentSchedule, rooms, rates, occupancy, transactions, refundDue, changeRequests };
   }
 
   // Records one line of the booking's money history (payment, refund, amount owed back)
@@ -346,28 +404,31 @@ export class BookingsService {
     });
 
     // ---- dates -------------------------------------------------------------
+    // The admin may move the stay (e.g. a guest now arrives a day later) as long as it stays
+    // within the event's dates; nights, price, installments and the invoice follow.
     let nights = 1;
+    let newCheckin: string | null = null;
+    let newCheckout: string | null = null;
     if (bookingroom) {
-      const stayCheckin = toIsoDay(bookingroom.checkin);
-      const stayCheckout = toIsoDay(bookingroom.checkout);
-      if (!stayCheckin || !stayCheckout) {
-        throw new BadRequestException('The check-in / check-out dates saved on this booking are not valid dates.');
-      }
-      nights = nightsBetween(stayCheckin, stayCheckout);
-      if (nights < 1) {
+      const pick = (label: string, submitted: string | undefined, saved: unknown) => {
+        const day = submitted ? toIsoDay(submitted) : toIsoDay(saved as string | null);
+        if (!day) throw new BadRequestException(`${label} date is not a valid date.`);
+        return day;
+      };
+      newCheckin = pick('Check-in', dto.checkin, bookingroom.checkin);
+      newCheckout = pick('Check-out', dto.checkout, bookingroom.checkout);
+      if (newCheckout <= newCheckin) {
         throw new BadRequestException('Check-out must be after check-in.');
       }
-      for (const [label, submitted, saved] of [
-        ['Check-in', dto.checkin, stayCheckin],
-        ['Check-out', dto.checkout, stayCheckout],
-      ] as const) {
-        if (submitted === undefined || submitted === null || submitted === '') continue;
-        const day = toIsoDay(submitted);
-        if (!day) throw new BadRequestException(`${label} date is not a valid date.`);
-        if (day !== saved) {
-          throw new BadRequestException(`${label} date cannot be changed — the stay dates are fixed for this booking.`);
-        }
+      const event = bookingroom.event_id
+        ? await this.prisma.events.findUnique({ where: { event_id: Number(bookingroom.event_id) } })
+        : null;
+      const eventStart = toIsoDay(event?.check_in);
+      const eventEnd = toIsoDay(event?.check_out);
+      if (eventStart && eventEnd && (newCheckin < eventStart || newCheckout > eventEnd)) {
+        throw new BadRequestException(`The stay must be within the event's dates (${eventStart} - ${eventEnd}).`);
       }
+      nights = nightsBetween(newCheckin, newCheckout);
     }
 
     // ---- guests / room -----------------------------------------------------
@@ -389,14 +450,9 @@ export class BookingsService {
       : await this.prisma.rooms.findUnique({ where: { rooms_id: Number(dto.room_id) } });
     const roomLabel = roomRecord?.room_name ?? 'This room';
 
+    // The admin has full control here: no guest-count limits (those apply to guests booking
+    // through the event link). The rate still follows the room option the party matches.
     const eventCaps = splitCsv(eventroom?.room_cap);
-    const { maxAdults, maxPeople } = maxOccupancy([...eventCaps, ...splitCsv(roomRecord?.room_capacity)]);
-    if (maxAdults > 0 && adults > maxAdults) {
-      throw new BadRequestException(`${roomLabel} allows a maximum of ${maxAdults} adult${maxAdults === 1 ? '' : 's'}.`);
-    }
-    if (maxPeople > 0 && adults + children > maxPeople) {
-      throw new BadRequestException(`${roomLabel} allows a maximum of ${maxPeople} guests (adults and children together).`);
-    }
 
     // ---- rate (follows the occupancy) -----------------------------------------
     const ages = childAge.split(',').map((s) => s.trim()).filter(Boolean);
@@ -415,9 +471,14 @@ export class BookingsService {
         const o = parseCapacity(c);
         return !!o && o.adults === adults && o.children === children;
       });
+      // otherwise the smallest option the party fits (3 adults -> "4 Adults"), then the option
+      // already on the booking, then one with the same number of adults
+      const fitting = allowedCapacities(eventCaps, adults, children).filter((c) => fitsCapacity(c, adults, children));
+      const smallestFit = fitting.length ? eventCaps.indexOf(fitting[0]) : -1;
       const current = eventCaps.findIndex((c) => sameCapacity(c, bookingroom?.room_cap));
       const sameAdults = eventCaps.findIndex((c) => parseCapacity(c)?.adults === adults);
-      const idx = exact >= 0 ? exact : current >= 0 ? current : sameAdults >= 0 ? sameAdults : 0;
+      const idx =
+        exact >= 0 ? exact : smallestFit >= 0 ? smallestFit : current >= 0 ? current : sameAdults >= 0 ? sameAdults : 0;
       if (eventCaps[idx] !== undefined && rateAt(idx) > 0) {
         baseRate = rateAt(idx);
         roomCap = eventCaps[idx];
@@ -483,6 +544,7 @@ export class BookingsService {
           where: { booking_id: String(bookingId) },
           data: {
             room_id: dto.room_id,
+            ...(newCheckin && newCheckout ? { checkin: newCheckin, checkout: newCheckout } : {}),
             quantity: String(qty),
             room_price: String(newRoomPrice),
             room_actual_price: baseRate,
@@ -694,7 +756,7 @@ export class BookingsService {
         rooms,
         transportTotal: Number(booking.transport_total ?? 0),
         grandTotal: Number(booking.total_card_amount ?? 0),
-        depositPaid: Number(booking.total_amount_after_percent ?? 0),
+        depositPaid: Number(booking.amount_paid ?? booking.total_amount_after_percent ?? 0),
         balance: Number(booking.balance ?? 0),
         schedule: paymentSchedule.map((s) => ({
           installmentNumber: s.installment_number,
@@ -703,7 +765,7 @@ export class BookingsService {
           status: s.status,
         })),
         accessCode: booking.access_code,
-        myBookingUrl: `${this.config.get<string>('WEB_APP_URL')}/my-booking`,
+        myBookingUrl: `${this.config.get<string>('WEB_APP_URL')}/my-booking?code=${booking.access_code}`,
       },
     };
   }
@@ -763,21 +825,53 @@ export class BookingsService {
           : null) ?? (await this.prisma.hotels.findFirst({ where: { hotel_name: event.hotel_name } })))
       : null;
 
-    const eventCheckIn = new Date(event.check_in as string);
-    const eventCheckOut = new Date(event.check_out as string);
+    if (isEventClosed(event.check_out)) {
+      throw new BadRequestException('Bookings for this event are closed — the event has already ended.');
+    }
+
+    const eventStart = toIsoDay(event.check_in);
+    const eventEnd = toIsoDay(event.check_out);
+    const today = todayIso();
     const eventrooms = await this.prisma.eventrooms.findMany({
       where: { event_id: String(event.event_id) },
     });
 
     const resolvedRooms = dto.rooms.map((line) => {
-      const checkin = new Date(line.checkin);
-      const checkout = new Date(line.checkout);
-      if (checkin < eventCheckIn || checkout > eventCheckOut || checkout <= checkin) {
+      const checkin = toIsoDay(line.checkin);
+      const checkout = toIsoDay(line.checkout);
+      if (!checkin || !checkout) {
+        throw new BadRequestException('Check-in / check-out must be valid dates.');
+      }
+      if (checkout <= checkin) {
+        throw new BadRequestException('Check-out must be after check-in.');
+      }
+      if ((eventStart && checkin < eventStart) || (eventEnd && checkout > eventEnd)) {
         throw new BadRequestException(
           `Selected dates must fall within the event's dates (${event.check_in} - ${event.check_out}).`,
         );
       }
+      if (checkin < today) {
+        throw new BadRequestException('Check-in date cannot be in the past.');
+      }
+
       const eventroom = eventrooms.find((r) => r.room_name === line.room_name);
+      const children = line.children ?? 0;
+      const fits = fitsCapacity(line.room_cap, line.adults, children);
+      if (fits === false) {
+        throw new BadRequestException(
+          `The "${capacityLabel(line.room_cap)}" option cannot host ${line.adults} adult${line.adults === 1 ? '' : 's'}` +
+            `${children ? ` and ${children} child${children === 1 ? '' : 'ren'}` : ''}. Please choose a room option that fits your party.`,
+        );
+      }
+      const allowed = allowedCapacities(splitCsv(eventroom?.room_cap), line.adults, children);
+      if (fits === true && !allowed.some((c) => sameCapacity(c, line.room_cap))) {
+        throw new BadRequestException(
+          `The "${capacityLabel(line.room_cap)}" option is for a larger party. Please choose ` +
+            `${allowed.map((c) => `"${capacityLabel(c)}"`).join(' or ')} for ${line.adults} adult${line.adults === 1 ? '' : 's'}` +
+            `${children ? ` and ${children} child${children === 1 ? '' : 'ren'}` : ''}.`,
+        );
+      }
+
       const baseRate = resolveRoomRate(eventroom, line.room_cap);
       return resolveRoomLine(line, baseRate);
     });
@@ -921,8 +1015,8 @@ export class BookingsService {
             orderBy: { installment_number: 'asc' },
           });
           if (schedules.length > 0) {
-            // Installments are built on the REMAINING balance (what is left after the deposit)
-            const amounts = buildInstallmentAmounts(schedules, balance);
+            // Percent installments are a share of the grand total (like the deposit); they add up to the balance
+            const amounts = buildInstallmentAmounts(schedules, balance, grandTotal);
             await tx.payment_schedules.createMany({
               data: schedules.map((s, i) => ({
                 booking_id: BigInt(booking.booking_id),
@@ -954,6 +1048,9 @@ export class BookingsService {
       );
     }
 
+    // The confirmation e-mail (with its PDF) is sent in the background: the guest gets the
+    // confirmation page straight away instead of waiting on the mail server.
+    void (async () => {
     try {
       const schedules = await this.prisma.payment_schedules.findMany({
         where: { booking_id: bookingResult.booking_id },
@@ -982,7 +1079,8 @@ export class BookingsService {
             adults: r.adults,
             children: r.children ?? 0,
             quantity: r.quantity,
-            unit_price: r.base_rate,
+            // per room for the whole stay — same as the invoice from My Booking / the dashboard
+            unit_price: Math.round((r.room_total / Math.max(1, r.quantity)) * 100) / 100,
             total: r.room_total,
           })),
           transportTotal,
@@ -996,13 +1094,14 @@ export class BookingsService {
             status: s.status,
           })),
           accessCode: bookingResult.access_code,
-          myBookingUrl: `${this.config.get<string>('WEB_APP_URL')}/my-booking`,
+          myBookingUrl: `${this.config.get<string>('WEB_APP_URL')}/my-booking?code=${bookingResult.access_code}`,
         },
       });
     } catch (err) {
       // Confirmation email is best-effort — the booking itself already
       // succeeded and must still be returned to the guest.
     }
+    })();
 
     return bookingResult;
   }
@@ -1036,6 +1135,17 @@ export class BookingsService {
       throw new BadRequestException('This installment has already been paid.');
     }
 
+    // Claim the installment before charging: if the guest refreshes / double-submits while
+    // the first payment is still running, the second request finds it already claimed and
+    // is refused instead of charging the card twice.
+    const claim = await this.prisma.payment_schedules.updateMany({
+      where: { id: schedule.id, status: { in: ['pending', 'failed'] } },
+      data: { status: 'processing' },
+    });
+    if (claim.count === 0) {
+      throw new BadRequestException('This installment is already being paid. Please refresh in a moment.');
+    }
+
     let charge: Stripe.Charge;
     try {
       charge = await this.stripe.charges.create({
@@ -1045,6 +1155,7 @@ export class BookingsService {
         description: `KT Travel booking ${booking.access_code} — installment ${schedule.installment_number}`,
       });
     } catch (err) {
+      await this.prisma.payment_schedules.update({ where: { id: schedule.id }, data: { status: schedule.status } });
       const message = err instanceof Error ? err.message : 'Payment failed.';
       throw new BadRequestException(message);
     }
@@ -1085,23 +1196,26 @@ export class BookingsService {
       return updated;
     });
 
-    try {
-      const user = booking.user_id
-        ? await this.prisma.users.findUnique({ where: { id: BigInt(booking.user_id) } })
-        : null;
-      const receiptEmail = booking.guest_email ?? user?.email;
-      if (receiptEmail) {
-        await this.mail.sendPaymentReceipt({
-          guestEmail: receiptEmail,
-          guestName: booking.guest_name ?? user?.name ?? 'Guest',
-          accessCode: booking.access_code as string,
-          amount: Number(schedule.amount),
-          newBalance,
-        });
+    // Receipt e-mail in the background — the payment itself already succeeded.
+    void (async () => {
+      try {
+        const user = booking.user_id
+          ? await this.prisma.users.findUnique({ where: { id: BigInt(booking.user_id) } })
+          : null;
+        const receiptEmail = booking.guest_email ?? user?.email;
+        if (receiptEmail) {
+          await this.mail.sendPaymentReceipt({
+            guestEmail: receiptEmail,
+            guestName: booking.guest_name ?? user?.name ?? 'Guest',
+            accessCode: booking.access_code as string,
+            amount: Number(schedule.amount),
+            newBalance,
+          });
+        }
+      } catch {
+        // best-effort
       }
-    } catch {
-      // Receipt email is best-effort — the payment itself already succeeded.
-    }
+    })();
 
     return { schedule: updatedSchedule, balance: newBalance };
   }
